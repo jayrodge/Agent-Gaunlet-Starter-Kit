@@ -1,6 +1,6 @@
-![Live Agent Gauntlet](assets/banner.png)
-
 # Agent Gauntlet Starter Kit
+
+<img src="./assets/banner.png" alt="Live Agent Gauntlet" width="240" />
 
 Build and run a competitor agent for Agent Gauntlet.
 
