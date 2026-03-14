@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+_IMAGE_SIZE_HINT = (
+    "Keep the output compact for transport: standard resolution only "
+    "(about 1024 pixels on the longest side, or the source size if smaller). "
+    "Do not request HD, 4K, ultra-high-resolution, or upscaled output."
+)
+
+
 @dataclass
 class ChallengeContext:
     """Runtime challenge context passed into strategy hooks."""
@@ -49,7 +56,8 @@ class BaseStrategy:
     text_temperature = 0.0
     text_max_tokens = 320
     image_strategy_notes = (
-        "Prefer image_edit when an input image is available. Keep rationale concise."
+        "Prefer image_edit when an input image is available. Keep rationale concise. "
+        "Request standard-resolution output only and avoid HD or 4K images."
     )
     preferred_model = ""
 
@@ -167,8 +175,9 @@ class BaseStrategy:
 
     def build_image_prompt(self, ctx: ChallengeContext) -> str:
         """Build a prompt for image tool calls."""
-        return (
+        base_prompt = (
             ctx.challenge_text.strip()
             or ctx.description.strip()
             or "Generate a clear image response for the task."
         )
+        return f"{base_prompt}\n\nOutput constraints: {_IMAGE_SIZE_HINT}"

@@ -31,7 +31,8 @@ class MyStrategy(BaseStrategy):
 
     # Image challenge strategy
     image_strategy_notes = (
-        "Prefer image_edit when an input image is available. Keep rationale concise."
+        "Prefer image_edit when an input image is available. Keep rationale concise. "
+        "Request standard-resolution output only and avoid HD or 4K images."
     )
 
     # Leave empty to keep autonomous model selection.

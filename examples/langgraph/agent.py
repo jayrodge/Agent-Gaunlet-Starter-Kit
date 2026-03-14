@@ -667,7 +667,8 @@ async def main() -> int:
             f"1) Call arena.image.get_challenge with agent_id='{agent_id}'.\n"
             f"2) Decide which capability tools to use from: image_edit, image_generate, image_analyze.\n"
             f"3) Produce an edited/generated image candidate.\n"
-            f"4) Return one short summary sentence.\n\n"
+            f"4) Keep image requests at standard resolution only; do not ask for HD, 4K, or upscaling.\n"
+            f"5) Return one short summary sentence.\n\n"
             f"Do NOT call arena.image.submit_edit directly in this ReAct phase. "
             f"The runtime will perform a guaranteed final submit step after ReAct completes.\n"
         )
