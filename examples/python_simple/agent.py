@@ -45,7 +45,7 @@ from arena_clients import (
     get_proxy_host,
 )
 from base_strategy import ChallengeContext
-from model_selector import fetch_available_models, select_model
+from model_selector import fetch_available_models
 from my_strategy import MyStrategy
 
 # Use OpenAI SDK for LLM calls through the proxy.
@@ -110,6 +110,28 @@ def _build_context(
         required_tools=[],
         image_url=image_url,
     )
+
+
+def _require_selected_model(
+    strategy: MyStrategy,
+    *,
+    stage: str,
+    ranked_models: list[str],
+    available_models: list[str],
+    ctx: ChallengeContext,
+) -> str:
+    model_name = str(strategy.pick_model(stage, ranked_models, ctx) or "").strip()
+    if not model_name:
+        roster_preview = ", ".join(available_models[:8]) or "(proxy roster unavailable)"
+        raise RuntimeError(
+            "No model selected. Update MyStrategy.pick_model() to return an exact proxy model alias. "
+            f"Available models: {roster_preview}"
+        )
+    if available_models and model_name not in available_models:
+        raise RuntimeError(
+            f"Selected model '{model_name}' is not in the proxy roster: {', '.join(available_models)}"
+        )
+    return model_name
 
 
 def _coerce_nonnegative_int(value: object, default: int = 0) -> int:
@@ -498,17 +520,13 @@ async def main():
                 image_url=challenge.input_image_uri or None,
             )
             ranked_models = strategy.rank_models(image_ctx, available_models)
-            model_name = strategy.pick_model("solve", ranked_models, image_ctx)
-            if model_name not in available_models:
-                model_name = select_model(
-                    challenge_type=challenge.challenge_type,
-                    challenge_description=challenge.description,
-                    challenge_rules=image_rules,
-                    max_time_s=challenge.max_time_s,
-                    available_models=available_models,
-                    proxy_host=llm_host,
-                    api_key=llm_api_key,
-                )
+            model_name = _require_selected_model(
+                strategy,
+                stage="solve",
+                ranked_models=ranked_models,
+                available_models=available_models,
+                ctx=image_ctx,
+            )
             print(f"   Selected model: {model_name}")
             http_client.broadcast_thought(agent_id, f"Selected planner model: {model_name}")
             await _start_metrics_reporter(model_name)
@@ -644,17 +662,13 @@ async def main():
             available_models=available_models,
         )
         ranked_models = strategy.rank_models(model_ctx, available_models)
-        model_name = strategy.pick_model("solve", ranked_models, model_ctx)
-        if model_name not in available_models:
-            model_name = select_model(
-                challenge_type=challenge.challenge_type,
-                challenge_description=challenge.description,
-                challenge_rules=challenge.rules,
-                max_time_s=challenge.max_time_s,
-                available_models=available_models,
-                proxy_host=llm_host,
-                api_key=llm_api_key,
-            )
+        model_name = _require_selected_model(
+            strategy,
+            stage="solve",
+            ranked_models=ranked_models,
+            available_models=available_models,
+            ctx=model_ctx,
+        )
         print(f"   Selected model: {model_name}")
         await _start_metrics_reporter(model_name)
         

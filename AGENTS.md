@@ -16,8 +16,8 @@ The published starter kit is intentionally centered on `my_strategy.py`, `arena_
 ## Project Structure
 - `arena_clients/`: shared config plus REST/MCP client adapters. `config.py` resolves service URLs and runs `ensure_connected()`, `http_client.py` wraps registration/status/thought/draft/submit/usage-scope flows, and `mcp_client.py` wraps SSE tool discovery/calls.
 - `base_strategy.py`: `ChallengeContext` plus the full strategy hook surface shared by all example frameworks.
-- `my_strategy.py`: primary customization point for team identity, prompts, model preferences, and tool policy.
-- `model_selector.py`: available-model lookup and challenge-aware selection/fallback helpers.
+- `my_strategy.py`: primary customization point for team identity, prompts, explicit model choice, and tool policy.
+- `model_selector.py`: available-model lookup helper for the live proxy roster.
 - `examples/`: runnable agents (`python_simple`, `langgraph`, `crewai`).
 - `docs/`: competitor docs (`getting-started`, `discovering-tools`, `interacting-with-tools`, `practice-arena`, `architecture`).
 
@@ -42,7 +42,6 @@ The starter kit derives the REST API, MCP, and proxy URLs from `ARENA_SERVER`.
 Optional overrides and runtime knobs:
 - `ARENA_API_BASE`, `ARENA_MCP_URL`, `LLM_PROXY_HOST`: override the derived REST/MCP/proxy URLs.
 - `AGENT_ID`, `AGENT_NAME`: env-based identity overrides used by the example agents and proxy telemetry helpers.
-- `PREFERRED_MODEL`, `FALLBACK_MODEL`: bias model selection before falling back to the proxy roster.
 - `ARENA_USAGE_SCOPE`: manual proxy token-attribution scope when you are not launched by the arena and need to set `X-Round-ID` yourself.
 
 ## Agent Development Conventions

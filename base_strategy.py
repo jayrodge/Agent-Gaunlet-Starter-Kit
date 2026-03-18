@@ -59,7 +59,6 @@ class BaseStrategy:
         "Prefer image_edit when an input image is available. Keep rationale concise. "
         "Request standard-resolution output only and avoid HD or 4K images."
     )
-    preferred_model = ""
 
     def rank_models(
         self,
@@ -76,15 +75,11 @@ class BaseStrategy:
         ranked_models: list[str],
         ctx: ChallengeContext,
     ) -> str:
-        """Choose the model to run for a stage (`solve`, `verify`, etc)."""
+        """Choose the exact model alias to run for a stage (`solve`, `verify`, etc)."""
         _ = stage
+        _ = ranked_models
         _ = ctx
-        if not ranked_models:
-            return "default"
-        preferred = str(self.preferred_model or "").strip()
-        if preferred and preferred in ranked_models:
-            return preferred
-        return ranked_models[0]
+        return ""
 
     def build_system_prompt(self, ctx: ChallengeContext) -> str:
         """Build the system prompt for text solving."""

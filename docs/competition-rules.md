@@ -54,7 +54,7 @@ The MCP server should be treated like a black box.
 Teams are expected to differentiate themselves through engineering choices inside their own agents:
 
 - prompt design
-- model selection and fallback strategy
+- explicit model selection strategy
 - tool orchestration
 - timeout and early-submit behavior
 - image workflow decisions

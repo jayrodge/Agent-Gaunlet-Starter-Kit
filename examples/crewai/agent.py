@@ -44,7 +44,7 @@ from arena_clients import (
     get_proxy_host,
 )
 from base_strategy import ChallengeContext
-from model_selector import fetch_available_models, select_model
+from model_selector import fetch_available_models
 from my_strategy import MyStrategy
 from arena_tools import (
     ArenaToolState,
@@ -167,6 +167,26 @@ def _build_context(
     )
 
 
+def _require_selected_model(
+    *,
+    ranked_models: list[str],
+    available_models: list[str],
+    ctx: ChallengeContext,
+) -> str:
+    model_name = str(STRATEGY.pick_model("solve", ranked_models, ctx) or "").strip()
+    if not model_name:
+        roster_preview = ", ".join(available_models[:8]) or "(proxy roster unavailable)"
+        raise RuntimeError(
+            "No model selected. Update MyStrategy.pick_model() to return an exact proxy model alias. "
+            f"Available models: {roster_preview}"
+        )
+    if available_models and model_name not in available_models:
+        raise RuntimeError(
+            f"Selected model '{model_name}' is not in the proxy roster: {', '.join(available_models)}"
+        )
+    return model_name
+
+
 def _challenge_rules_text(challenge: object, modality: str) -> str:
     if modality == "text":
         rules = str(getattr(challenge, "rules", "") or "").strip()
@@ -286,52 +306,6 @@ def _describe_image_tool(spec: ToolSpec) -> str:
     if spec.instruction_field:
         parts.append(f"instruction via `{spec.instruction_field}`")
     return "; ".join(parts)
-
-
-def _explicit_strategy_model() -> str:
-    return str(getattr(STRATEGY, "preferred_model", "") or "").strip()
-
-
-def _dedupe_models(
-    candidates: list[str],
-    *,
-    available_models: list[str],
-) -> list[str]:
-    allowed = set(available_models)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        normalized = str(candidate or "").strip()
-        if not normalized:
-            continue
-        if available_models and normalized not in allowed:
-            continue
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        deduped.append(normalized)
-    return deduped
-
-
-def _build_candidate_models(
-    *,
-    strategy_model: str,
-    selector_model: str,
-    ranked_models: list[str],
-    available_models: list[str],
-) -> list[str]:
-    explicit_preference = _explicit_strategy_model()
-    ordered: list[str] = []
-
-    if explicit_preference and strategy_model == explicit_preference:
-        ordered.extend([strategy_model, selector_model])
-    else:
-        ordered.extend([selector_model, strategy_model])
-
-    ordered.extend(ranked_models)
-    ordered.extend(available_models)
-    return _dedupe_models(ordered, available_models=available_models)
-
 
 async def _wait_for_start_gate(http_client: HttpArenaClient, agent_id: str) -> None:
     await asyncio.to_thread(http_client.update_status, agent_id, "ready")
@@ -686,35 +660,16 @@ async def main() -> int:
         image_url=getattr(challenge, "input_image_uri", None),
     )
     ranked_models = STRATEGY.rank_models(selection_ctx, available_models)
-    strategy_model = STRATEGY.pick_model("solve", ranked_models, selection_ctx)
-    selector_model = select_model(
-        challenge_type=challenge.challenge_type,
-        challenge_description=challenge.description,
-        challenge_rules=challenge_rules_text,
-        max_time_s=challenge.max_time_s,
-        available_models=available_models,
-        proxy_host=llm_host,
-        api_key=llm_api_key,
-    )
-    candidate_models = _build_candidate_models(
-        strategy_model=strategy_model,
-        selector_model=selector_model,
+    model_name = _require_selected_model(
         ranked_models=ranked_models,
         available_models=available_models,
+        ctx=selection_ctx,
     )
-    if not candidate_models:
-        fallback_candidates = [selector_model, strategy_model]
-        candidate_models = _dedupe_models(
-            fallback_candidates,
-            available_models=[],
-        )
-    if not candidate_models:
-        raise RuntimeError("No candidate models are available for CrewAI solving.")
-    print(f"   Candidate models: {', '.join(candidate_models)}")
+    print(f"   Selected model: {model_name}")
     await asyncio.to_thread(
         http_client.broadcast_thought,
         agent_id,
-        f"Candidate models: {', '.join(candidate_models[:4])}",
+        f"Selected model: {model_name}",
     )
 
     llm_params = STRATEGY.get_llm_params(selection_ctx)
@@ -777,65 +732,52 @@ async def main() -> int:
 
     start_ms = time.time() * 1000
     result = None
-    active_model_name = ""
+    active_model_name = model_name
     last_error: Exception | None = None
-    for attempt_index, candidate_model in enumerate(candidate_models, start=1):
-        active_model_name = candidate_model
-        if attempt_index == 1:
-            print(f"   Starting with model: {candidate_model}")
-            await asyncio.to_thread(
-                http_client.broadcast_thought,
-                agent_id,
-                f"Starting model: {candidate_model}",
-            )
-        else:
-            print(f"   Retrying with model: {candidate_model}")
-            await asyncio.to_thread(
-                http_client.broadcast_thought,
-                agent_id,
-                f"Retrying with model: {candidate_model}",
-            )
+    print(f"   Starting with model: {model_name}")
+    await asyncio.to_thread(
+        http_client.broadcast_thought,
+        agent_id,
+        f"Starting model: {model_name}",
+    )
 
-        llm = LLM(
-            model=candidate_model,
-            api_key=llm_api_key,
-            base_url=llm_host,
-            api_base=llm_host,
-            temperature=llm_temperature,
-            max_tokens=llm_max_tokens,
-        )
-        solver_agent = CrewAgent(
-            role="Agent Gauntlet Challenge Solver",
-            goal="Solve the current Agent Gauntlet challenge accurately and quickly.",
-            backstory=(
-                "You are a competitive AI agent solving timed Agent Gauntlet challenges. "
-                "Use tools selectively, keep reasoning concise, and respect the required answer format."
-            ),
-            llm=llm,
-            function_calling_llm=llm,
-            tools=crew_tools,
-            verbose=True,
-            allow_delegation=False,
-            max_iter=6 if modality == "image" else 8,
-            max_execution_time=max(30, int(challenge.max_time_s or 0)),
-        )
-        solve_task = Task(
-            description=task_description,
-            expected_output=expected_output,
-            agent=solver_agent,
-        )
-        crew = Crew(agents=[solver_agent], tasks=[solve_task], verbose=True)
-        try:
-            result = await crew.kickoff_async()
-            break
-        except Exception as exc:
-            last_error = exc
-            print(f"   Model '{candidate_model}' failed: {exc}")
-            if attempt_index < len(candidate_models):
-                continue
+    llm = LLM(
+        model=model_name,
+        api_key=llm_api_key,
+        base_url=llm_host,
+        api_base=llm_host,
+        temperature=llm_temperature,
+        max_tokens=llm_max_tokens,
+    )
+    solver_agent = CrewAgent(
+        role="Agent Gauntlet Challenge Solver",
+        goal="Solve the current Agent Gauntlet challenge accurately and quickly.",
+        backstory=(
+            "You are a competitive AI agent solving timed Agent Gauntlet challenges. "
+            "Use tools selectively, keep reasoning concise, and respect the required answer format."
+        ),
+        llm=llm,
+        function_calling_llm=llm,
+        tools=crew_tools,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=6 if modality == "image" else 8,
+        max_execution_time=max(30, int(challenge.max_time_s or 0)),
+    )
+    solve_task = Task(
+        description=task_description,
+        expected_output=expected_output,
+        agent=solver_agent,
+    )
+    crew = Crew(agents=[solver_agent], tasks=[solve_task], verbose=True)
+    try:
+        result = await crew.kickoff_async()
+    except Exception as exc:
+        last_error = exc
+        print(f"   Model '{model_name}' failed: {exc}")
 
     if result is None:
-        final_error = last_error or RuntimeError("CrewAI solve failed for all candidate models.")
+        final_error = last_error or RuntimeError("CrewAI solve failed for the selected model.")
         await asyncio.to_thread(http_client.update_status, agent_id, "failed")
         await asyncio.to_thread(
             http_client.broadcast_thought,

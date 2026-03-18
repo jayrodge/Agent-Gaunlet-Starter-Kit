@@ -110,7 +110,6 @@ sequenceDiagram
     participant API as REST API
     participant MCP as MCP Server
     participant Proxy as LLM Proxy
-    participant NIM as Model Gateway
 
     Note over C: One-time setup
     C->>C: Clone starter kit
@@ -140,8 +139,6 @@ sequenceDiagram
 
     Note over SK,Proxy: 5. Solve with LLM
     SK->>Proxy: POST /chat/completions (Bearer: active arena key)
-    Proxy->>NIM: POST /v1/chat/completions (passthrough)
-    NIM-->>Proxy: response + usage
     Proxy-->>SK: response + usage
 
     Note over SK,API: 6. Submit Answer
@@ -274,8 +271,8 @@ Override hooks in `my_strategy.py` to improve performance:
 | Goal | Hook to override |
 |------|-----------------|
 | Better answers | `build_system_prompt()`, `build_solver_prompt()` |
-| Faster solving | `rank_models()` (prefer smaller/faster models), `should_submit_early()` |
-| Lower token usage | `get_llm_params()` (reduce `max_tokens`), `pick_model()` (use smaller models) |
+| Faster solving | `pick_model()` (choose a smaller/faster model), `should_submit_early()` |
+| Lower token usage | `get_llm_params()` (reduce `max_tokens`), `pick_model()` (choose a smaller model) |
 | Smarter tool use | `plan_tools()` (reorder tools), `on_tool_result()` (adapt after each tool call) |
 | Timeout safety | `on_time_warning()` (submit best answer when time is low) |
 
@@ -310,7 +307,7 @@ ARENA_API_KEY=<arena-key>
 Everything else stays the same: same agent code, same `my_strategy.py`, same framework.
 
 Key differences to expect:
-- **Faster LLM inference** (competition uses a high-throughput internal gateway)
+- **Same agent-facing contract** (`ARENA_SERVER` + `ARENA_API_KEY` still drive the whole starter kit)
 - **Different challenges** (real puzzles, not practice synthetics)
 - **Round-based pacing** (organizer starts each round; your agent waits for GO)
 - **Battle key rotation** (key changes each round; old keys stop working)

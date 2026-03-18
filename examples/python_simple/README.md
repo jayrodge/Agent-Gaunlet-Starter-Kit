@@ -31,6 +31,7 @@ python agent.py
 ```
 
 The script loads `.env` from the repository root automatically.
+Before the first run, update [`../../my_strategy.py`](../../my_strategy.py) so `pick_model()` returns one exact alias from the proxy `/models` roster.
 
 ## How It Works
 
@@ -50,7 +51,7 @@ The solving loop is intentionally simple so you can see all moving parts clearly
 - Edit [`../../my_strategy.py`](../../my_strategy.py) to set:
   - `agent_id`, `agent_name`
   - prompts (`text_system_prompt`, strategy notes)
-  - model and generation settings (`preferred_model`, temperature, max tokens)
+  - model and generation settings (`pick_model()`, temperature, max tokens)
 - Start here before moving to framework-based examples.
 
 ## When to Use This Example

@@ -45,7 +45,7 @@ from arena_clients import (
     get_proxy_host,
 )
 from base_strategy import ChallengeContext
-from model_selector import fetch_available_models, select_model
+from model_selector import fetch_available_models
 from my_strategy import MyStrategy
 
 
@@ -63,7 +63,6 @@ DEFAULT_TEXT_STRATEGY_NOTES = ""
 DEFAULT_IMAGE_STRATEGY_NOTES = ""
 DEFAULT_TEXT_TEMPERATURE = 0.0
 DEFAULT_TEXT_MAX_TOKENS = 1024
-DEFAULT_PREFERRED_MODEL = ""
 BLANK_PNG_DATA_URI = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7/"
@@ -175,21 +174,24 @@ def _build_context(
     )
 
 
-def _resolve_preferred_model(available_models: list[str]) -> str | None:
-    preferred = (
-        os.getenv("PREFERRED_MODEL")
-        or str(getattr(STRATEGY, "preferred_model", "")).strip()
-        or DEFAULT_PREFERRED_MODEL
-    ).strip()
-    if not preferred:
-        return None
-    if available_models and preferred not in available_models:
-        print(
-            f"   Preferred model '{preferred}' not in proxy model list; "
-            "falling back to autonomous selection.",
+def _require_selected_model(
+    *,
+    ranked_models: list[str],
+    available_models: list[str],
+    ctx: ChallengeContext,
+) -> str:
+    model_name = str(STRATEGY.pick_model("solve", ranked_models, ctx) or "").strip()
+    if not model_name:
+        roster_preview = ", ".join(available_models[:8]) or "(proxy roster unavailable)"
+        raise RuntimeError(
+            "No model selected. Update MyStrategy.pick_model() to return an exact proxy model alias. "
+            f"Available models: {roster_preview}"
         )
-        return None
-    return preferred
+    if available_models and model_name not in available_models:
+        raise RuntimeError(
+            f"Selected model '{model_name}' is not in the proxy roster: {', '.join(available_models)}"
+        )
+    return model_name
 
 
 async def _wait_for_start_gate(http_client: HttpArenaClient, agent_id: str) -> None:
@@ -316,23 +318,6 @@ def _extract_ordered_answer_from_rules(rules: str) -> str:
         ):
             return ", ".join(parts)
     return ""
-
-
-def _is_retryable_llm_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return any(
-        token in message
-        for token in (
-            "503",
-            "service unavailable",
-            "serviceunavailable",
-            "midstreamfallbackerror",
-            "apiconnectionerror",
-            "timeout",
-            "temporarily unavailable",
-        )
-    )
-
 
 def _extract_image_uri_from_tool_result(result: dict) -> str:
     if not isinstance(result, dict):
@@ -579,21 +564,11 @@ async def main() -> int:
         image_url=getattr(challenge, "input_image_uri", None),
     )
     ranked_models = STRATEGY.rank_models(selection_ctx, available_models)
-    preferred_model = _resolve_preferred_model(ranked_models)
-    if preferred_model:
-        model_name = preferred_model
-    else:
-        model_name = STRATEGY.pick_model("solve", ranked_models, selection_ctx)
-        if model_name not in available_models:
-            model_name = select_model(
-                challenge_type=challenge.challenge_type,
-                challenge_description=challenge.description,
-                challenge_rules=challenge_rules_for_selection,
-                max_time_s=challenge.max_time_s,
-                available_models=available_models,
-                proxy_host=llm_host,
-                api_key=llm_api_key,
-            )
+    model_name = _require_selected_model(
+        ranked_models=ranked_models,
+        available_models=available_models,
+        ctx=selection_ctx,
+    )
     text_system_prompt = (
         STRATEGY.build_system_prompt(selection_ctx).strip() or DEFAULT_TEXT_SYSTEM_PROMPT
     )
@@ -729,17 +704,6 @@ async def main() -> int:
         f"   ReAct limits: recursion={react_recursion_limit}, timeout={react_timeout_s:.1f}s"
     )
 
-    candidate_models: list[str] = []
-    for candidate in [model_name, *ranked_models, *available_models]:
-        normalized = str(candidate or "").strip()
-        if normalized and normalized not in candidate_models:
-            candidate_models.append(normalized)
-    max_attempts = min(
-        len(candidate_models),
-        _coerce_positive_int(os.getenv("SOLVE_MAX_ATTEMPTS"), 3),
-    )
-    candidate_models = candidate_models[:max_attempts]
-
     live_prompt_tokens = 0
     live_completion_tokens = 0
     live_total_tokens = 0
@@ -801,61 +765,35 @@ async def main() -> int:
 
     result = None
     solve_error: Exception | None = None
-    for attempt_idx, candidate_model in enumerate(candidate_models, start=1):
-        active_model_name = candidate_model
-        if candidate_model != model_name:
-            print(
-                f"   Retrying with fallback model: {candidate_model} "
-                f"(attempt {attempt_idx}/{len(candidate_models)})"
-            )
-            await asyncio.to_thread(
-                http_client.broadcast_thought,
-                agent_id,
-                f"🔁 Retrying with fallback model: {candidate_model}",
-            )
-        llm = ChatOpenAI(
-            model=candidate_model,
-            base_url=llm_host,
-            api_key=llm_api_key,
-            temperature=text_temperature,
-            max_tokens=text_max_tokens,
-            default_headers=_build_proxy_headers(agent_id, usage_scope),
+    llm = ChatOpenAI(
+        model=model_name,
+        base_url=llm_host,
+        api_key=llm_api_key,
+        temperature=text_temperature,
+        max_tokens=text_max_tokens,
+        default_headers=_build_proxy_headers(agent_id, usage_scope),
+    )
+    agent = create_react_agent(llm, tools)
+    try:
+        result = await asyncio.wait_for(
+            agent.ainvoke(
+                {"messages": [{"role": "user", "content": prompt}]},
+                config={"recursion_limit": react_recursion_limit},
+            ),
+            timeout=react_timeout_s,
         )
-        agent = create_react_agent(llm, tools)
-        try:
-            result = await asyncio.wait_for(
-                agent.ainvoke(
-                    {"messages": [{"role": "user", "content": prompt}]},
-                    config={"recursion_limit": react_recursion_limit},
-                ),
-                timeout=react_timeout_s,
-            )
-            model_name = candidate_model
-            solve_error = None
-            break
-        except asyncio.TimeoutError as exc:
-            solve_error = exc
-            print(
-                f"   solve attempt {attempt_idx} timed out after {react_timeout_s:.1f}s"
-            )
-            await asyncio.to_thread(
-                http_client.broadcast_thought,
-                agent_id,
-                (
-                    f"⏱️ ReAct solve attempt timed out after {react_timeout_s:.0f}s "
-                    f"(attempt {attempt_idx}/{len(candidate_models)})."
-                ),
-            )
-            if attempt_idx >= len(candidate_models):
-                break
-            await asyncio.sleep(float(attempt_idx))
-        except Exception as exc:
-            solve_error = exc
-            print(f"   solve attempt {attempt_idx} failed: {exc}")
-            retryable = _is_retryable_llm_error(exc)
-            if attempt_idx >= len(candidate_models) or not retryable:
-                break
-            await asyncio.sleep(float(attempt_idx))
+        solve_error = None
+    except asyncio.TimeoutError as exc:
+        solve_error = exc
+        print(f"   solve timed out after {react_timeout_s:.1f}s")
+        await asyncio.to_thread(
+            http_client.broadcast_thought,
+            agent_id,
+            f"⏱️ ReAct solve timed out after {react_timeout_s:.0f}s.",
+        )
+    except Exception as exc:
+        solve_error = exc
+        print(f"   solve failed: {exc}")
 
     reporter_stop.set()
     try:
@@ -881,7 +819,7 @@ async def main() -> int:
         await asyncio.to_thread(
             http_client.broadcast_thought,
             agent_id,
-            "⚠️ LLM unavailable after retries. Falling back to rules-safe answer path.",
+            "⚠️ LLM solve failed. Falling back to rules-safe answer path.",
         )
     if modality == "image":
         if react_image_uri:
@@ -1084,7 +1022,7 @@ async def main() -> int:
                 default_headers=_build_proxy_headers(agent_id, usage_scope),
             )
             strict_response = client.chat.completions.create(
-                model="nemotron-nano-9b",
+                model=model_name,
                 messages=[
                     {"role": "system", "content": strict_system_msg},
                     {"role": "user", "content": f"Reasoning:\n\n{raw_content}\n\nExtract the final answer now."},
